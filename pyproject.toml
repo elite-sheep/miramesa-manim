@@ -1,0 +1,48 @@
+[project]
+name = "miramesa-manim"
+version = "0.1.0.dev0"
+description = "High-fidelity text for manim: real font shaping, optical sizes, and typographic metrics."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [{ name = "Yu-Chen Wang" }]
+keywords = ["manim", "typography", "text", "coretext", "harfbuzz", "opentype"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Topic :: Multimedia :: Graphics",
+  "Topic :: Text Processing :: Fonts",
+]
+dependencies = [
+  "manim>=0.20",
+  "numpy>=2.1",
+  "fonttools>=4.50",
+]
+
+[project.optional-dependencies]
+# macOS: lays text out with the same engine Keynote uses
+coretext = ["pyobjc-framework-CoreText>=10.0; sys_platform == 'darwin'"]
+# portable shaping (phase 2)
+harfbuzz = ["uharfbuzz>=0.39"]
+
+[project.entry-points."manim.plugins"]
+miramesa = "miramesa"
+
+[dependency-groups]
+dev = ["pytest>=8.0", "pillow>=11.0", "matplotlib>=3.9"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/miramesa"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
