@@ -51,6 +51,21 @@ def test_clusters_index_the_source_string(backend):
 
 
 @needs_new_york
+def test_clusters_count_code_points_not_utf16_units(backend):
+    """Core Text indexes an NSString, which counts UTF-16 code units.
+
+    One astral character occupies two of them, so without the translation
+    every cluster after an emoji is off by one and slicing by character
+    position lands on the wrong glyph.
+    """
+    text = "a\U0001f600b"  # the emoji is one code point but two UTF-16 units
+    line = backend.shape(text, FontSpec.of("New York", 44))
+    # the emoji itself carries no outline here, so only "a" and "b" survive
+    assert [g.cluster for g in line.glyphs] == [0, 2]
+    assert text[line.glyphs[-1].cluster] == "b"
+
+
+@needs_new_york
 def test_tracking_makes_scaling_slightly_nonlinear(backend):
     """Apple fonts carry a `trak` table that tightens letterspacing as size grows.
 
@@ -86,6 +101,18 @@ def test_font_spec_is_hashable_and_normalised():
     b = FontSpec.of("New York", 44, {"opsz": 44, "wght": 600})
     assert a == b and hash(a) == hash(b)
     assert a.variation_dict == {"opsz": 44, "wght": 600}
+
+
+@needs_new_york
+def test_chars_addresses_glyphs_after_an_astral_character():
+    """`chars` slices the Python string, so an emoji must not shift the rest."""
+    from manim import tempconfig
+
+    from miramesa import GlyphText
+
+    with tempconfig({"pixel_width": 1920, "frame_width": 1920 / 72}):
+        text = GlyphText("a\U0001f600b", font="New York", size=44)
+    assert len(text.chars(2, 3).submobjects) == 1
 
 
 @needs_new_york

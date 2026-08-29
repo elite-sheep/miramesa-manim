@@ -65,6 +65,12 @@ class Glyph:
 
     ``draw`` replays the outline into a pen in glyph-local coordinates; ``x``
     and ``y`` are where that outline's origin sits relative to the pen origin.
+
+    ``cluster`` indexes the **Python string** that was shaped -- code points,
+    not UTF-16 code units -- so ``text[glyph.cluster]`` is the character the
+    glyph was shaped from.  A backend whose engine counts differently must
+    convert; Core Text does.  A ligature reports the index of its first
+    character, so several characters can share one glyph.
     """
 
     glyph_id: int

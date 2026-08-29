@@ -72,6 +72,30 @@ def _ct_font(family: str, size: float, variations: tuple[tuple[str, float], ...]
     return CTFontCreateWithFontDescriptor(descriptor, size, None)
 
 
+def _code_point_index(text: str) -> list[int] | None:
+    """Map every UTF-16 offset in ``text`` to the code point that contains it.
+
+    Core Text reports string indices into an ``NSString``, which counts UTF-16
+    code units, so one astral character -- an emoji, say -- shifts every index
+    after it by one.  Clusters are documented to index the Python string, so
+    they have to be translated or a caller slicing by character position
+    addresses the wrong glyph, or none at all.
+
+    Returns ``None`` when the two conventions agree, which is the case for any
+    text made only of BMP characters.  The table carries one entry past the end
+    so a run's end offset maps to ``len(text)``.
+    """
+    if all(ord(character) <= 0xFFFF for character in text):
+        return None
+    table = [
+        index
+        for index, character in enumerate(text)
+        for _ in range(2 if ord(character) > 0xFFFF else 1)
+    ]
+    table.append(len(text))
+    return table
+
+
 def _replay(cg_path, pen: Pen) -> None:
     """Replay a CGPath into a pen, in the glyph's own coordinates.
 
@@ -138,6 +162,7 @@ class CoreTextBackend:
             text, {kCTFontAttributeName: ct_font}
         )
         line = CTLineCreateWithAttributedString(attributed)
+        to_code_point = _code_point_index(text)
 
         glyphs: list[Glyph] = []
         for run in CTLineGetGlyphRuns(line):
@@ -151,18 +176,19 @@ class CoreTextBackend:
             # a run carries its own font: this is where Core Text hands back a
             # substitute for characters the requested family cannot draw
             run_font = CTRunGetAttributes(run)[kCTFontAttributeName]
-            for glyph_id, position, cluster in zip(
-                ids, positions, clusters, strict=True
-            ):
+            for glyph_id, position, index in zip(ids, positions, clusters, strict=True):
                 cg_path = CTFontCreatePathForGlyph(run_font, glyph_id, None)
                 if cg_path is None:  # whitespace carries no outline
                     continue
+                cluster = int(index)
                 glyphs.append(
                     Glyph(
                         glyph_id=int(glyph_id),
                         x=float(position.x),
                         y=float(position.y),
-                        cluster=int(cluster),
+                        cluster=cluster
+                        if to_code_point is None
+                        else to_code_point[cluster],
                         draw=_make_drawer(cg_path),
                     )
                 )
