@@ -1,5 +1,7 @@
 # miramesa-manim
 
+![MiraMesa-Manim set in New York at 128pt](logo.png)
+
 High-fidelity text for [manim](https://www.manim.community/): real font shaping,
 optical sizes, and typographic metrics.
 
