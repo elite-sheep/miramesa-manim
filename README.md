@@ -11,8 +11,27 @@ manim's own renderer.
 
 ## Install
 
+Requirements:
+```
+python >= 3.11
+manim
+```
+
 ```sh
-pip install miramesa-manim[coretext]   # macOS
+git clone https://github.com/elite-sheep/miramesa-manim.git
+cd miramesa-manim
+pip install -e ".[coretext]"          # macOS
+```
+
+`-e` installs it editable, so edits under `src/miramesa` take effect without
+reinstalling. The `coretext` extra is what pulls in `pyobjc-framework-CoreText`,
+the binding this package shapes through.
+
+To work on it, add the test and figure dependencies and run the suite:
+
+```sh
+pip install -e ".[coretext]" --group dev   # pytest, pillow, matplotlib
+pytest
 ```
 
 ## Use
