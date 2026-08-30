@@ -8,7 +8,7 @@ box at (910, 510) and 128pt at (910, 570).
 
 from __future__ import annotations
 
-from manim import BLUE, WHITE, Scene, Write, config
+from manim import BLUE, RED, WHITE, Scene, Write, config
 
 from miramesa import keynote
 
@@ -36,3 +36,13 @@ class HighlightOneWord(Scene):
         self.add(title.chars(0, 5))  # "Hello"
         self.play(Write(title.chars(6, 11)))  # "World"
         self.play(title.chars(6, 11).animate.set_color(BLUE))
+
+
+class ColouredWord(Scene):
+    """A colour span, set at construction and then moved to the other word."""
+
+    def construct(self) -> None:
+        title = keynote.text_box("Hello World", FONT, 910, 570, 128, t2c={"World": RED})
+        self.add(title)
+        self.play(title.animate.set_span_color(0, 11, BLUE))
+        self.play(title.animate.set_span_color(0, 5, RED))

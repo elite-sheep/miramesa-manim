@@ -35,6 +35,33 @@ into the source string), so `title.chars(0, 5)` is "Hello" and can be animated
 on its own. `ascent`, `descent`, and `advance` are available in scene units —
 the metrics you need to sit text on a baseline instead of eyeballing a centre.
 
+## Colour spans
+
+Because every glyph knows which character it came from, a range of the string
+can be given its own colour — by substring, by slice, or as an explicit span:
+
+```python
+GlyphText("Hello World", t2c={"World": RED})  # every occurrence
+GlyphText("Hello World", t2c={"[6:11]": RED})  # a slice of the string
+GlyphText("Hello World", spans=[ColorSpan(6, 11, RED)])
+title.set_span_color(6, 11, RED)  # after the fact; animates
+title.set_color_by_text("World", RED)
+```
+
+Both `t2c` forms index the source string — the same indices `cluster` and
+`chars` use, so `t2c={"[0:5]": RED}` and `chars(0, 5)` cover the same
+characters. (manim's own `Text` has two disagreeing conventions here: its
+`t2c` slices index the source string, while slicing the mobject indexes
+rendered characters with whitespace removed.) Where two spans overlap, the
+later one wins; `t2c` is applied after `spans`.
+
+One catch, which the package tells you about rather than papering over: a
+ligature is a *single* glyph covering several characters, so it can only take
+one colour. Asking for `t2c={"[0:3]": RED}` on "office" in a font that draws
+"ffi" as one glyph is a request that cannot be honoured — the ligature takes
+the colour of its first character, and you get a warning naming it. Pass
+`ligatures=False` to shape every character as its own glyph instead.
+
 ## Backends
 
 | backend | platform | gets you |
@@ -86,8 +113,7 @@ a baseline, or animating one word, means recomputing the font metrics yourself.
 
 ## Status
 
-Alpha. Single-line text only; multi-line, colour spans, and the HarfBuzz backend
-are next.
+Alpha. Single-line text only; multi-line and the HarfBuzz backend are next.
 
 Rendering is verified against the cairo renderer. Under `--renderer=opengl` the
 class re-bases onto `OpenGLVMobject` through manim's `ConvertToOpenGL`

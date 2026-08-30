@@ -11,6 +11,8 @@ Only shaping and outline extraction happen here -- manim still rasterises.
 from __future__ import annotations
 
 import struct
+from bisect import bisect_right
+from collections.abc import Sequence
 from functools import lru_cache
 
 from miramesa.backends.base import register_backend, resolve_family
@@ -34,10 +36,12 @@ try:
         CTRunGetGlyphs,
         CTRunGetPositions,
         CTRunGetStringIndices,
+        CTRunGetStringRange,
         kCTFontAttributeName,
         kCTFontNameAttribute,
         kCTFontUIFontSystem,
         kCTFontVariationAttribute,
+        kCTLigatureAttributeName,
     )
     from Foundation import NSAttributedString
 
@@ -94,6 +98,23 @@ def _code_point_index(text: str) -> list[int] | None:
     ]
     table.append(len(text))
     return table
+
+
+def _cluster_ends(starts: Sequence[int], run_end: int) -> dict[int, int]:
+    """Where each glyph's characters stop, taken from the next boundary along.
+
+    Core Text reports only where a glyph's characters *start*, so a ligature
+    is indistinguishable from a single-character glyph until you look at what
+    follows it: it covers everything up to the next glyph's start, or to the
+    end of the run.  Sorting the boundaries keeps this direction-agnostic, so
+    a right-to-left run works the same way.
+    """
+    boundaries = sorted({*starts, run_end})
+    ends = {}
+    for start in starts:
+        after = bisect_right(boundaries, start)
+        ends[start] = boundaries[after] if after < len(boundaries) else run_end
+    return ends
 
 
 def _replay(cg_path, pen: Pen) -> None:
@@ -158,11 +179,18 @@ class CoreTextBackend:
     def shape(self, text: str, font: FontSpec) -> ShapedLine:
         family = resolve_family(self, font.family)
         ct_font = _ct_font(family, font.size, font.variations)
+        attributes = {kCTFontAttributeName: ct_font}
+        if not font.ligatures:
+            attributes[kCTLigatureAttributeName] = 0
         attributed = NSAttributedString.alloc().initWithString_attributes_(
-            text, {kCTFontAttributeName: ct_font}
+            text, attributes
         )
         line = CTLineCreateWithAttributedString(attributed)
-        to_code_point = _code_point_index(text)
+        table = _code_point_index(text)
+
+        def index_of(utf16_offset: int) -> int:
+            """The index into ``text`` of the character at a UTF-16 offset."""
+            return utf16_offset if table is None else table[utf16_offset]
 
         glyphs: list[Glyph] = []
         for run in CTLineGetGlyphRuns(line):
@@ -172,23 +200,29 @@ class CoreTextBackend:
             span = (0, count)
             ids = CTRunGetGlyphs(run, span, None)
             positions = CTRunGetPositions(run, span, None)
-            clusters = CTRunGetStringIndices(run, span, None)
+            clusters = [
+                index_of(int(raw)) for raw in CTRunGetStringIndices(run, span, None)
+            ]
+            run_range = CTRunGetStringRange(run)
+            ends = _cluster_ends(
+                clusters, index_of(int(run_range.location + run_range.length))
+            )
             # a run carries its own font: this is where Core Text hands back a
             # substitute for characters the requested family cannot draw
             run_font = CTRunGetAttributes(run)[kCTFontAttributeName]
-            for glyph_id, position, index in zip(ids, positions, clusters, strict=True):
+            for glyph_id, position, cluster in zip(
+                ids, positions, clusters, strict=True
+            ):
                 cg_path = CTFontCreatePathForGlyph(run_font, glyph_id, None)
                 if cg_path is None:  # whitespace carries no outline
                     continue
-                cluster = int(index)
                 glyphs.append(
                     Glyph(
                         glyph_id=int(glyph_id),
                         x=float(position.x),
                         y=float(position.y),
-                        cluster=cluster
-                        if to_code_point is None
-                        else to_code_point[cluster],
+                        cluster=cluster,
+                        cluster_end=ends[cluster],
                         draw=_make_drawer(cg_path),
                     )
                 )

@@ -21,3 +21,9 @@ needs_new_york = pytest.mark.skipif(
     font_missing("New York"),
     reason="needs macOS with Apple's New York font installed",
 )
+
+#: New York does not ligate, so the ligature tests need a font that does
+needs_hoefler = pytest.mark.skipif(
+    font_missing("Hoefler Text"),
+    reason="needs macOS with Hoefler Text installed, which ligates 'ffi'",
+)
