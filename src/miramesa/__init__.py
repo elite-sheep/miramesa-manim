@@ -28,6 +28,7 @@ from miramesa.mobject import (
     pixel_to_scene,
     pixels_per_unit,
 )
+from miramesa.spans import ColorSpan
 from miramesa.spec import FontSpec, Glyph, ShapedLine
 
 __version__ = "0.1.0.dev0"
@@ -36,6 +37,7 @@ __all__ = [
     "DEFAULT_STEM_DARKENING",
     "Backend",
     "BackendUnavailable",
+    "ColorSpan",
     "FontSpec",
     "Glyph",
     "GlyphText",

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import logging
+from collections.abc import Mapping, Sequence
+from typing import Any, Self
 
 import numpy as np
 from fontTools.pens.basePen import BasePen
@@ -10,9 +12,12 @@ from manim import BLACK, RendererType, VGroup, VMobject, config
 from manim.mobject.opengl.opengl_compatibility import ConvertToOpenGL
 
 from miramesa.backends.base import Backend, get_backend
+from miramesa.spans import ColorSpan, color_table, spans_from_mapping
 from miramesa.spec import FontSpec, Glyph, ShapedLine
 
 __all__ = ["DEFAULT_STEM_DARKENING", "GlyphText", "pixel_to_scene", "pixels_per_unit"]
+
+logger = logging.getLogger("miramesa")
 
 #: manim's cairo camera uses ``stroke_width * this`` as the line width, in
 #: scene units (``Camera.cairo_line_width_multiple``).
@@ -109,6 +114,38 @@ def _glyph_mobject(glyph: Glyph, ppu: float) -> VMobject | None:
     return mobject
 
 
+def _paint(mobject, color, stroke_width: float) -> None:
+    """Colour a glyph, stem-darkening stroke included.
+
+    The stroke is not decoration -- it is what grows the outline to match Core
+    Graphics' rasterisation -- so it has to carry the same colour as the fill.
+    Painting through one helper is what keeps the two from drifting apart.
+    """
+    mobject.set_fill(color, opacity=1)
+    if stroke_width > 0:
+        mobject.set_stroke(color, width=stroke_width, opacity=1)
+    else:
+        mobject.set_stroke(width=0)
+
+
+def _split_glyphs(glyphs, colors: Sequence[Any]) -> list[Glyph]:
+    """Glyphs whose characters were asked for in more than one colour.
+
+    A ligature is a single glyph covering several characters, so it can only
+    take one colour.  A span ending inside one is therefore a request that
+    cannot be honoured, and saying so is better than quietly colouring the
+    characters on the far side of the boundary too.
+    """
+    return [
+        glyph
+        for glyph in glyphs
+        if any(
+            colors[index] != colors[glyph.cluster]
+            for index in range(glyph.cluster, glyph.cluster_end)
+        )
+    ]
+
+
 class GlyphText(VMobject, metaclass=ConvertToOpenGL):
     """Text shaped by a real text engine, as one ``VMobject`` per glyph.
 
@@ -139,12 +176,29 @@ class GlyphText(VMobject, metaclass=ConvertToOpenGL):
         with the system font rather than silently substituted.
     size
         Em size, in pixels of the rendered frame.
+    color
+        The colour of every character no span covers.
+    spans
+        :class:`~miramesa.spans.ColorSpan` ranges, e.g.
+        ``[ColorSpan(6, 11, RED)]``.  Bounds are Python slice bounds.
+    t2c
+        The same thing in manim's ``Text`` spelling: ``{"World": RED}`` colours
+        every occurrence of a substring, ``{"[6:11]": RED}`` a slice.  Both
+        index the source string, which is what ``cluster`` and :meth:`chars`
+        index too -- so ``t2c={"[0:5]": RED}`` and ``chars(0, 5)`` cover the
+        same characters.  Applied after ``spans``; where two overlap, the later
+        one wins.
     variations
         OpenType variation axes, e.g. ``{"wght": 600}``.  Backends set ``opsz``
         from ``size`` unless it appears here.
     stem_darkening
         Outward growth in pixels compensating for cairo's lighter rasterisation;
         see :data:`DEFAULT_STEM_DARKENING`.  Pass ``0`` for the raw outlines.
+    ligatures
+        Ligation is on by default, so "ffi" may be drawn as one glyph.  Such a
+        glyph can only take one colour: a span ending inside it is reported and
+        takes the colour of its first character.  ``ligatures=False`` gives
+        every character its own glyph, at the cost of the font's ligatures.
     """
 
     def __init__(
@@ -153,9 +207,12 @@ class GlyphText(VMobject, metaclass=ConvertToOpenGL):
         font: str = "Helvetica",
         size: float = 48.0,
         color=BLACK,
+        spans: Sequence[ColorSpan] | None = None,
+        t2c: Mapping[str, Any] | None = None,
         variations: Mapping[str, float] | None = None,
         backend: Backend | str | None = None,
         stem_darkening: float | None = None,
+        ligatures: bool = True,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -163,7 +220,7 @@ class GlyphText(VMobject, metaclass=ConvertToOpenGL):
             raise NotImplementedError("GlyphText handles a single line for now")
 
         engine = backend if isinstance(backend, Backend) else get_backend(backend)
-        spec = FontSpec.of(font, size, variations)
+        spec = FontSpec.of(font, size, variations, ligatures=ligatures)
         ppu = pixels_per_unit()
 
         self.text = text
@@ -171,6 +228,12 @@ class GlyphText(VMobject, metaclass=ConvertToOpenGL):
         self.backend_name = engine.name
         self.pixels_per_unit = ppu
         self.metrics: ShapedLine = engine.shape(text, spec)
+        #: the spans as requested, resolved from ``spans`` and ``t2c``.  A
+        #: record of the request, not of the current colours: recolouring a
+        #: glyph afterwards, by any route, does not show up here.
+        self.spans: tuple[ColorSpan, ...] = tuple(spans or ()) + tuple(
+            spans_from_mapping(text, t2c or {})
+        )
 
         for glyph in self.metrics.glyphs:
             mobject = _glyph_mobject(glyph, ppu)
@@ -180,16 +243,16 @@ class GlyphText(VMobject, metaclass=ConvertToOpenGL):
         darkening = (
             DEFAULT_STEM_DARKENING if stem_darkening is None else float(stem_darkening)
         )
-        self.set_fill(color, opacity=1)
-        if darkening > 0:
-            # a centred stroke grows the shape by half its width
-            self.set_stroke(
-                color,
-                width=2 * darkening / (_CAIRO_LINE_WIDTH_MULTIPLE * ppu),
-                opacity=1,
-            )
-        else:
-            self.set_stroke(width=0)
+        # a centred stroke grows the shape by half its width
+        width = (
+            2 * darkening / (_CAIRO_LINE_WIDTH_MULTIPLE * ppu) if darkening > 0 else 0
+        )
+        _paint(self, color, width)  # the default, on the whole family
+        if self.spans:
+            colors = color_table(text, self.spans, color)
+            for mobject in self.submobjects:
+                _paint(mobject, colors[mobject.cluster], width)
+            self._warn_about_split(_split_glyphs(self.metrics.glyphs, colors))
 
     # -- typographic metrics, in scene units ---------------------------------
 
@@ -215,3 +278,47 @@ class GlyphText(VMobject, metaclass=ConvertToOpenGL):
         stop = len(self.text) if stop is None else stop
         matching = (g for g in self.submobjects if start <= g.cluster < stop)
         return _group_class()(*matching)
+
+    # -- colour --------------------------------------------------------------
+
+    def set_span_color(self, start: int, stop: int | None, color) -> Self:
+        """Recolour ``text[start:stop]``, stem-darkening stroke included.
+
+        Bounds are Python slice bounds, as in :class:`~miramesa.spans.ColorSpan`.
+        A bound falling inside a ligature is reported, as at construction: the
+        glyph is not divisible, so it takes the colour of its first character
+        and the range actually recoloured is wider than the one asked for.
+        Animates like any other mobject method::
+
+            self.play(title.animate.set_span_color(6, 11, RED))
+        """
+        start, stop = ColorSpan(start, stop, color).resolve(len(self.text))
+        self._warn_about_split(
+            [
+                glyph
+                for glyph in self.metrics.glyphs
+                if glyph.cluster < start < glyph.cluster_end
+                or glyph.cluster < stop < glyph.cluster_end
+            ]
+        )
+        self.chars(start, stop).set_color(color)
+        return self
+
+    def set_color_by_text(self, substring: str, color) -> Self:
+        """Recolour every occurrence of ``substring``."""
+        for span in spans_from_mapping(self.text, {substring: color}):
+            self.set_span_color(span.start, span.stop, color)
+        return self
+
+    def _warn_about_split(self, split: Sequence[Glyph]) -> None:
+        if not split:
+            return
+        logger.warning(
+            "a colour span ends inside %s in %r, which the font draws as one "
+            "glyph; it takes the colour of its first character. Pass "
+            "ligatures=False to give every character its own glyph.",
+            " and ".join(
+                repr(self.text[glyph.cluster : glyph.cluster_end]) for glyph in split
+            ),
+            self.text,
+        )
